@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import os
-import platform
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
-import requests
 from mediapipe.tasks.python.core.base_options import BaseOptions
 from mediapipe.tasks.python.vision.core.image import Image
 from mediapipe.tasks.python.vision.image_segmenter import (
@@ -15,69 +11,30 @@ from mediapipe.tasks.python.vision.image_segmenter import (
     ImageSegmenterOptions,
 )
 
-
-MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/image_segmenter/"
-    "selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"
-)
-MODEL_ENV_VAR = "MEDIAPIPE_SELFIE_MODEL_PATH"
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "selfie_multiclass_256x256.tflite"
 
 
-def _ensure_model() -> Path:
-    env_path = os.getenv(MODEL_ENV_VAR)
-    if env_path:
-        model_path = Path(env_path).expanduser().resolve()
-        if not model_path.exists():
-            raise FileNotFoundError(
-                f"{MODEL_ENV_VAR} points to a missing file: {model_path}"
-            )
-        return model_path
-
-    if MODEL_PATH.exists():
-        return MODEL_PATH
-
-    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    response = requests.get(MODEL_URL, timeout=60)
-    response.raise_for_status()
-    MODEL_PATH.write_bytes(response.content)
+def _require_local_model() -> Path:
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            "MediaPipe model file is missing. Please place "
+            f"`selfie_multiclass_256x256.tflite` at: {MODEL_PATH}"
+        )
     return MODEL_PATH
 
 
-def _supports_gpu_delegate() -> bool:
-    if platform.system() != "Linux":
-        return False
-    try:
-        return cv2.cuda.getCudaEnabledDeviceCount() > 0
-    except Exception:
-        return False
-
-
 def _create_segmenter() -> ImageSegmenter:
-    model_path = _ensure_model()
+    model_path = _require_local_model()
     base_options = BaseOptions(
         model_asset_path=str(model_path),
-        delegate=BaseOptions.Delegate.GPU if _supports_gpu_delegate() else BaseOptions.Delegate.CPU,
+        delegate=BaseOptions.Delegate.CPU,
     )
     options = ImageSegmenterOptions(
         base_options=base_options,
         output_confidence_masks=True,
         output_category_mask=False,
     )
-    try:
-        return ImageSegmenter.create_from_options(options)
-    except RuntimeError:
-        if base_options.delegate != BaseOptions.Delegate.GPU:
-            raise
-        cpu_options = ImageSegmenterOptions(
-            base_options=BaseOptions(
-                model_asset_path=str(model_path),
-                delegate=BaseOptions.Delegate.CPU,
-            ),
-            output_confidence_masks=True,
-            output_category_mask=False,
-        )
-        return ImageSegmenter.create_from_options(cpu_options)
+    return ImageSegmenter.create_from_options(options)
 
 
 def _largest_component(mask: np.ndarray) -> np.ndarray:

@@ -6,6 +6,13 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+os.environ["http_proxy"] = ""
+os.environ["https_proxy"] = ""
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+os.environ["all_proxy"] = ""
+os.environ["ALL_PROXY"] = ""
+
 import cv2
 import numpy as np
 import requests
@@ -16,19 +23,16 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "").strip()
 
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
 SILICONFLOW_BASE_URL = os.getenv(
     "SILICONFLOW_BASE_URL",
     "https://api.siliconflow.cn/v1",
 ).rstrip("/")
 
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-reasoner")
-KOLORS_INPAINTING_MODEL = os.getenv(
+QWEN_IMAGE_EDIT_MODEL = os.getenv(
     "SILICONFLOW_INPAINTING_MODEL",
-    "Kwai-Kolors/Kolors-Inpainting",
+    "Qwen/Qwen-Image-Edit",
 )
 
 DEFAULT_NEGATIVE_PROMPT = (
@@ -54,10 +58,6 @@ def _to_png_data_url(image: Image.Image) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _image_size_string(image: Image.Image) -> str:
-    return f"{image.width}x{image.height}"
-
-
 def _normalize_mask(mask: np.ndarray | Image.Image) -> Image.Image:
     if isinstance(mask, Image.Image):
         mask_image = mask.convert("L")
@@ -72,64 +72,6 @@ def _normalize_mask(mask: np.ndarray | Image.Image) -> Image.Image:
     mask_array = np.array(mask_image)
     mask_array = np.where(mask_array > 16, 255, 0).astype(np.uint8)
     return Image.fromarray(mask_array, mode="L")
-
-
-def _extract_text(response_json: dict[str, Any]) -> str:
-    try:
-        content = response_json["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise PainterError(f"Unexpected DeepSeek response: {response_json}") from exc
-
-    if not isinstance(content, str) or not content.strip():
-        raise PainterError("DeepSeek returned an empty prompt.")
-    return content.strip()
-
-
-def optimize_inpainting_prompt(user_request_cn: str) -> str:
-    api_key = _require_api_key("DEEPSEEK_API_KEY", DEEPSEEK_API_KEY)
-    url = f"{DEEPSEEK_BASE_URL}/chat/completions"
-
-    system_prompt = (
-        "You are an expert fashion and beauty prompt engineer for image inpainting. "
-        "Convert the user's Chinese hairstyle request into one polished English inpainting prompt. "
-        "The prompt must focus on hair only, preserve the person's identity, face, pose, framing, "
-        "lighting, skin tone, and clothing, and describe realistic hair texture, hairline, volume, "
-        "color, strands, salon-quality detail, and photographic realism. "
-        "Return only the final English prompt with no explanation, no bullets, and no quotation marks."
-    )
-
-    payload = {
-        "model": DEEPSEEK_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    "User request in Chinese:\n"
-                    f"{user_request_cn}\n\n"
-                    "Write a high-quality English inpainting prompt for a hair edit."
-                ),
-            },
-        ],
-        "temperature": 0.7,
-        "max_tokens": 220,
-        "stream": False,
-    }
-
-    response = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=90,
-    )
-    if not response.ok:
-        raise PainterError(
-            f"DeepSeek request failed: {response.status_code} {response.text}"
-        )
-    return _extract_text(response.json())
 
 
 def _extract_generated_image(response_json: dict[str, Any]) -> str:
@@ -162,7 +104,7 @@ def _decode_image_reference(image_ref: str) -> Image.Image:
 def generate_inpainted_image(
     image_path: str | os.PathLike[str],
     mask: np.ndarray | Image.Image,
-    prompt_en: str,
+    prompt: str,
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
 ) -> Image.Image:
     api_key = _require_api_key("SILICONFLOW_API_KEY", SILICONFLOW_API_KEY)
@@ -171,17 +113,10 @@ def generate_inpainted_image(
     mask_image = _normalize_mask(mask).resize(source_image.size, Image.Resampling.LANCZOS)
 
     payload = {
-        "model": KOLORS_INPAINTING_MODEL,
-        "prompt": prompt_en,
-        "negative_prompt": negative_prompt,
-        "image_size": _image_size_string(source_image),
-        "num_inference_steps": 30,
-        "guidance_scale": 7.5,
+        "model": QWEN_IMAGE_EDIT_MODEL,
+        "prompt": prompt,
         "image": _to_png_data_url(source_image),
-        # SiliconFlow's generic image docs do not document a stable mask field for Kolors-Inpainting.
-        # Send the common variants to maximize compatibility with the deployed gateway.
         "mask": _to_png_data_url(mask_image),
-        "mask_image": _to_png_data_url(mask_image),
     }
 
     response = requests.post(
@@ -210,9 +145,8 @@ def generate_hairstyle_image(
     mask: np.ndarray | Image.Image,
     user_request_cn: str,
 ) -> Image.Image:
-    prompt_en = optimize_inpainting_prompt(user_request_cn)
     return generate_inpainted_image(
         image_path=image_path,
         mask=mask,
-        prompt_en=prompt_en,
+        prompt=user_request_cn.strip(),
     )

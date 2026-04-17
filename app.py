@@ -8,7 +8,6 @@ import streamlit as st
 from PIL import Image
 
 from utils.painter import (
-    DEEPSEEK_API_KEY,
     SILICONFLOW_API_KEY,
     PainterError,
     generate_hairstyle_image,
@@ -50,8 +49,6 @@ def main() -> None:
         st.write("4. 结果会自动保存到 `outputs/` 文件夹，并可直接下载。")
 
         missing_keys = []
-        if not _has_valid_key(DEEPSEEK_API_KEY):
-            missing_keys.append("DEEPSEEK_API_KEY")
         if not _has_valid_key(SILICONFLOW_API_KEY):
             missing_keys.append("SILICONFLOW_API_KEY")
 
@@ -87,8 +84,6 @@ def main() -> None:
 
     if start:
         missing_keys = []
-        if not _has_valid_key(DEEPSEEK_API_KEY):
-            missing_keys.append("DEEPSEEK_API_KEY")
         if not _has_valid_key(SILICONFLOW_API_KEY):
             missing_keys.append("SILICONFLOW_API_KEY")
 
@@ -155,7 +150,10 @@ def main() -> None:
             st.error(f"处理失败：{exc}")
         finally:
             if temp_input_path.exists():
-                temp_input_path.unlink()
+                try:
+                    temp_input_path.unlink()
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
